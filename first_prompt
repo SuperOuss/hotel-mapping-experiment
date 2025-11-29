@@ -1,0 +1,11 @@
+Can you create a repo called experiment hotel mapping, and create two folders, one for the front end and one for the back end. 
+
+It's a very simple page where the user can upload a CSV based on certain headers, and the back end takes these hotels and maps them according to a logic I'll specify later. 
+
+I just need the front and the back end to communcate for now. 
+
+Here's the CSV headers I expect, we need a UI for the user to match them : 
+
+hotel_id,hotel_name,hotel_adress,country_iso_code,Latitude,Longitude
+
+You can correct those if needed, but overall that's the main requirement. Please also create a repo for github for this new project
