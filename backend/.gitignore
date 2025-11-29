@@ -1,12 +1,3 @@
-node_modules/
-dist/
-build/
-uploads/
-.env
-.DS_Store
-*.log
-
-# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -16,5 +7,6 @@ env/
 venv/
 ENV/
 .venv
+uploads/
 *.csv
 

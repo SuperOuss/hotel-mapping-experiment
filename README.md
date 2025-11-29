@@ -13,8 +13,13 @@ A simple application for uploading CSV files containing hotel data and mapping t
 
 ```bash
 cd backend
-npm install
-npm start
+pip install -r requirements.txt
+python server.py
+```
+
+Or using uvicorn directly:
+```bash
+uvicorn server:app --reload --port 3001
 ```
 
 The backend server will run on `http://localhost:3001`
@@ -52,4 +57,17 @@ The application expects CSV files with headers that can be mapped to:
 - `country_iso_code`
 - `latitude`
 - `longitude`
+
+## GitHub Setup
+
+To push this repository to GitHub:
+
+1. Create a new repository on GitHub (e.g., `hotel-mapping-experiment`)
+2. Add the remote and push:
+
+```bash
+git remote add origin https://github.com/YOUR_USERNAME/hotel-mapping-experiment.git
+git branch -M main
+git push -u origin main
+```
 
