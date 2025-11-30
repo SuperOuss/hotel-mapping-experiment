@@ -1,5 +1,6 @@
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, BackgroundTasks
 from fastapi.responses import RedirectResponse, FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import json
 import os
@@ -17,6 +18,15 @@ import threading
 from google.cloud import storage
 
 app = FastAPI()
+
+# CORS - Allow all origins for prototype
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Google Cloud Storage Configuration
 GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", None)
@@ -73,8 +83,6 @@ def get_embedding_model():
             if _embedding_model is None:
                 _embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
     return _embedding_model
-
-# CORS removed for prototype
 
 # Expected headers
 EXPECTED_HEADERS = [
