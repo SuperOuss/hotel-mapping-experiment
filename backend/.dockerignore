@@ -7,10 +7,12 @@ env/
 venv/
 ENV/
 .venv
-uploads/
-output/
 *.csv
+.git/
+.gitignore
 .env
 .env.local
-.env.*.local
+*.md
+output/
+*.log
 
