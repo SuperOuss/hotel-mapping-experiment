@@ -16,6 +16,11 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 from google.cloud import storage
+from dotenv import load_dotenv
+
+# Load environment variables from .env file (if it exists)
+# This is useful for local development
+load_dotenv()
 
 app = FastAPI()
 
@@ -28,33 +33,42 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Google Cloud Storage Configuration
+# Google Cloud Storage Configuration - REQUIRED for Cloud Run deployment
 GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", None)
-USE_GCS = GCS_BUCKET_NAME is not None
+print(f"🔍 Reading GCS_BUCKET_NAME from environment: {GCS_BUCKET_NAME}")
+if not GCS_BUCKET_NAME:
+    raise RuntimeError("GCS_BUCKET_NAME environment variable is required. Please configure a GCS bucket.")
 
-# Initialize GCS client if bucket is configured
-gcs_client = None
-if USE_GCS:
-    try:
-        gcs_client = storage.Client()
-        print(f"Initialized GCS client for bucket: {GCS_BUCKET_NAME}")
-    except Exception as e:
-        print(f"Warning: Failed to initialize GCS client: {e}")
-        USE_GCS = False
-
-# Create output directory for generated files (fallback for local development)
-OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "output"))
-if not USE_GCS:
-    OUTPUT_DIR.mkdir(exist_ok=True)
+# Initialize GCS client
+try:
+    gcs_client = storage.Client()
+    print(f"✓ Initialized GCS client for bucket: {GCS_BUCKET_NAME}")
+except Exception as e:
+    raise RuntimeError(f"Failed to initialize GCS client for bucket {GCS_BUCKET_NAME}: {e}")
 
 # Job storage (in-memory, could be moved to Redis/DB for production)
 jobs: Dict[str, Dict[str, Any]] = {}
 
-# Redis and Model Configuration - use environment variables with defaults
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", "26379"))
-REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
+# Redis Configuration - REQUIRED for Cloud Run deployment
+REDIS_HOST = os.getenv("REDIS_HOST")
+print(f"🔍 Reading REDIS_HOST from environment: {REDIS_HOST}")
+if not REDIS_HOST:
+    raise RuntimeError("REDIS_HOST environment variable is required. Please configure Redis host.")
+
+REDIS_PORT_STR = os.getenv("REDIS_PORT")
+print(f"🔍 Reading REDIS_PORT from environment: {REDIS_PORT_STR}")
+if not REDIS_PORT_STR:
+    raise RuntimeError("REDIS_PORT environment variable is required. Please configure Redis port.")
+try:
+    REDIS_PORT = int(REDIS_PORT_STR)
+except ValueError:
+    raise RuntimeError(f"Invalid REDIS_PORT value: {REDIS_PORT_STR}. Must be a valid integer.")
+
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)  # Optional - some Redis instances don't require passwords
+REDIS_PASSWORD_DISPLAY = "***" if REDIS_PASSWORD else "None"
+print(f"🔍 Reading REDIS_PASSWORD from environment: {REDIS_PASSWORD_DISPLAY}")
 INDEX_NAME = os.getenv("REDIS_INDEX_NAME", "hotels_idx")
+print(f"🔍 Reading REDIS_INDEX_NAME from environment: {INDEX_NAME} (default: hotels_idx)")
 VECTOR_DIM = 384  # Matches 'all-MiniLM-L6-v2'
 TOP_K = 5  # Return top 5 matches
 SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.7"))
@@ -70,6 +84,32 @@ redis_client = redis.Redis(
     socket_connect_timeout=10,
     socket_timeout=10
 )
+
+@app.on_event("startup")
+async def startup_log_config():
+    """Log configuration on startup"""
+    print("\n" + "="*60)
+    print("🚀 Server Starting - Configuration Summary")
+    print("="*60)
+    print(f"📦 GCS Bucket: {GCS_BUCKET_NAME}")
+    print(f"🔴 Redis Host: {REDIS_HOST}")
+    print(f"🔴 Redis Port: {REDIS_PORT}")
+    print(f"🔴 Redis Password: {'***' if REDIS_PASSWORD else 'None (not set)'}")
+    print(f"🔴 Redis Index: {INDEX_NAME}")
+    print(f"⚙️  Similarity Threshold: {SIMILARITY_THRESHOLD}")
+    print(f"⚙️  Max Worker Threads: {MAX_WORKER_THREADS}")
+    print("="*60 + "\n")
+
+@app.on_event("startup")
+async def check_redis_connection():
+    """Check Redis connection on startup"""
+    try:
+        redis_client.ping()
+        print(f"✓ Redis connection successful: {REDIS_HOST}:{REDIS_PORT}")
+    except Exception as e:
+        print(f"✗ ERROR: Failed to connect to Redis at {REDIS_HOST}:{REDIS_PORT}")
+        print(f"  Error: {e}")
+        raise RuntimeError(f"Redis connection failed: {e}")
 
 # Initialize embedding model (lazy load on first use)
 _embedding_model = None
@@ -392,33 +432,30 @@ def process_hotels_background_sync(
         # Create output DataFrame
         output_df = pd.DataFrame(output_rows)
         
-        # Save to CSV file (local or GCS)
+        # Save to CSV file in GCS
         filename = f"{job_id}.csv"
-        file_path = None
         
-        if USE_GCS and gcs_client:
-            # Upload to Google Cloud Storage
-            try:
-                bucket = gcs_client.bucket(GCS_BUCKET_NAME)
-                blob = bucket.blob(filename)
-                
-                # Convert DataFrame to CSV string
-                csv_string = output_df.to_csv(index=False)
-                blob.upload_from_string(csv_string, content_type='text/csv')
-                
-                file_path = f"gs://{GCS_BUCKET_NAME}/{filename}"
-                print(f"Job {job_id} - Uploaded file to GCS: {file_path}")
-            except Exception as e:
-                print(f"Error uploading to GCS: {e}")
-                # Fallback to local storage
-                output_file = OUTPUT_DIR / filename
-                output_df.to_csv(output_file, index=False)
-                file_path = str(output_file)
-        else:
-            # Save locally
-            output_file = OUTPUT_DIR / filename
-            output_df.to_csv(output_file, index=False)
-            file_path = str(output_file)
+        try:
+            bucket = gcs_client.bucket(GCS_BUCKET_NAME)
+            blob = bucket.blob(filename)
+            
+            # Convert DataFrame to CSV string
+            csv_string = output_df.to_csv(index=False)
+            # Upload with public read access
+            blob.upload_from_string(
+                csv_string, 
+                content_type='text/csv',
+                predefined_acl='publicRead'
+            )
+            
+            file_path = f"gs://{GCS_BUCKET_NAME}/{filename}"
+            print(f"Job {job_id} - Uploaded file to GCS: {file_path}")
+        except Exception as e:
+            error_msg = f"Failed to upload file to GCS: {e}"
+            print(f"Error uploading to GCS: {error_msg}")
+            import traceback
+            traceback.print_exc()
+            raise RuntimeError(error_msg)
         
         # Calculate processing time metrics
         processing_end_time = datetime.now()
@@ -444,7 +481,7 @@ def process_hotels_background_sync(
                 print(f"Warning: Job {job_id} - Neither processing_started_at nor created_at found, cannot calculate processing time")
         
         # Update job status to completed with coverage information
-        update_job_status(job_id, "completed", processed=len(processed_hotels), file_path=str(output_file), matched_count=matched_count)
+        update_job_status(job_id, "completed", processed=len(processed_hotels), file_path=file_path, matched_count=matched_count)
         
         # Verify processing time is still in job dict after update
         if job_id in jobs:
@@ -595,12 +632,16 @@ async def get_job_status(job_id: str):
 @app.get("/api/download/{job_id}")
 async def download_file(job_id: str):
     """Download the processed CSV file"""
+    print(f"📥 Download request for job_id: {job_id}")
+    
     if job_id not in jobs:
+        print(f"  ✗ Job not found: {job_id}")
         raise HTTPException(status_code=404, detail="Job not found")
     
     job = jobs[job_id]
     
     if job["status"] != "completed":
+        print(f"  ✗ Job not completed. Status: {job['status']}")
         raise HTTPException(
             status_code=400,
             detail=f"Job is not completed. Current status: {job['status']}"
@@ -608,42 +649,40 @@ async def download_file(job_id: str):
     
     file_path = job.get("file_path")
     if not file_path:
+        print(f"  ✗ File path not found in job")
         raise HTTPException(status_code=404, detail="Output file not found")
     
-    # Handle GCS files
-    if file_path.startswith("gs://"):
-        if not USE_GCS or not gcs_client:
-            raise HTTPException(status_code=500, detail="GCS not configured")
+    print(f"  📁 File path: {file_path}")
+    
+    # All files should be in GCS
+    if not file_path.startswith("gs://"):
+        error_msg = f"Invalid file path format (expected gs://): {file_path}"
+        print(f"  ✗ {error_msg}")
+        raise HTTPException(status_code=500, detail=error_msg)
+    
+    print(f"  ☁️  Serving from Google Cloud Storage")
+    
+    try:
+        # Extract bucket and blob name from gs:// path
+        path_parts = file_path.replace("gs://", "").split("/", 1)
+        bucket_name = path_parts[0]
+        blob_name = path_parts[1] if len(path_parts) > 1 else f"{job_id}.csv"
         
-        try:
-            # Extract bucket and blob name from gs:// path
-            path_parts = file_path.replace("gs://", "").split("/", 1)
-            bucket_name = path_parts[0]
-            blob_name = path_parts[1] if len(path_parts) > 1 else f"{job_id}.csv"
-            
-            bucket = gcs_client.bucket(bucket_name)
-            blob = bucket.blob(blob_name)
-            
-            # Generate signed URL (valid for 1 hour)
-            signed_url = blob.generate_signed_url(
-                expiration=timedelta(hours=1),
-                method="GET"
-            )
-            
-            return RedirectResponse(url=signed_url)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error generating download URL: {str(e)}")
-    
-    # Handle local files
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Output file not found")
-    
-    from fastapi.responses import FileResponse
-    return FileResponse(
-        file_path,
-        media_type="text/csv",
-        filename=f"hotel_mapping_{job_id}.csv"
-    )
+        print(f"  📦 Bucket: {bucket_name}, Blob: {blob_name}")
+        
+        # Use public URL for public bucket (no signed URL needed)
+        # URL format: https://storage.googleapis.com/{bucket}/{blob}
+        public_url = f"https://storage.googleapis.com/{bucket_name}/{blob_name}"
+        
+        print(f"  ✓ Using public URL for GCS download")
+        print(f"  🔗 Redirecting to: {public_url}")
+        
+        return RedirectResponse(url=public_url)
+    except Exception as e:
+        print(f"  ✗ Error generating GCS download URL: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error generating download URL: {str(e)}")
 
 
 @app.get("/")

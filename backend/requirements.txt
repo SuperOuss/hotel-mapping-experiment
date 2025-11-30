@@ -6,4 +6,5 @@ redis==5.0.1
 sentence-transformers>=2.7.0
 numpy>=1.26.0
 google-cloud-storage>=2.10.0
+python-dotenv>=1.0.0
 

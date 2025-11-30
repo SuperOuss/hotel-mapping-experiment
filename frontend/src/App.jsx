@@ -11,7 +11,7 @@ const EXPECTED_HEADERS = [
   'longitude'
 ];
 
-// API base URL from environment variable (defaults to localhost for development)
+// API base URL from environment variable (defaults to localhost for local testing)
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
 
 function App() {
