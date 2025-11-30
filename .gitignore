@@ -18,3 +18,4 @@ ENV/
 .venv
 *.csv
 
+*.txt

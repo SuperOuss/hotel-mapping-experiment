@@ -182,6 +182,38 @@ def prepare_hotel_text(hotel: Dict[str, Any]) -> str:
     return f"{name}, {address}, {city}, {country}"
 
 
+def format_mapped_id(hotel_id) -> str:
+    """Format mapped hotel ID with 'lp' prefix and convert to hex (lowercase)"""
+    # Handle None, empty string, or falsy values
+    if hotel_id is None or hotel_id == "":
+        return ""
+    
+    # Convert to string and strip whitespace - handle any input type
+    try:
+        hotel_id_str = str(hotel_id).strip()
+    except Exception:
+        return ""
+    
+    if not hotel_id_str or hotel_id_str == "nan" or hotel_id_str.lower() == "none":
+        return ""
+    
+    try:
+        # Handle both int and float (convert float to int)
+        # First try direct int conversion
+        try:
+            id_int = int(hotel_id_str)
+        except ValueError:
+            # If that fails, try float then int
+            id_int = int(float(hotel_id_str))
+        
+        # Convert to hex (lowercase, without '0x' prefix) and add 'lp' prefix
+        hex_id = format(id_int, 'x')  # 'x' gives lowercase hex
+        return f"lp{hex_id}"
+    except (ValueError, TypeError, OverflowError):
+        # If conversion fails, return empty string
+        return ""
+
+
 def process_single_hotel(
     idx: int,
     hotel: Dict[str, Any],
@@ -210,7 +242,10 @@ def process_single_hotel(
     was_matched = False
     if matches:
         best_match = matches[0]
-        output_row["matched_hotel_id"] = best_match.get("hotelId", "")
+        raw_hotel_id = best_match.get("hotelId", "")
+        formatted_id = format_mapped_id(raw_hotel_id)
+        # Ensure it's stored as a string to prevent pandas from converting it
+        output_row["matched_hotel_id"] = str(formatted_id) if formatted_id else ""
         output_row["matched_hotel_name"] = best_match.get("name", "")
         output_row["matched_hotel_address"] = best_match.get("address", "")
         output_row["matched_hotel_country"] = best_match.get("country", "")
@@ -431,6 +466,29 @@ def process_hotels_background_sync(
         
         # Create output DataFrame
         output_df = pd.DataFrame(output_rows)
+        
+        # Ensure matched_hotel_id is explicitly a string type to prevent pandas from converting it
+        if "matched_hotel_id" in output_df.columns:
+            # Convert to string and ensure formatting is applied
+            def ensure_formatted(val):
+                if pd.isna(val) or val == "" or val is None:
+                    return ""
+                val_str = str(val).strip()
+                # If it doesn't start with 'lp', it might not be formatted - try to format it
+                if val_str and not val_str.startswith("lp"):
+                    try:
+                        # Try to convert and format
+                        if '.' in val_str:
+                            id_int = int(float(val_str))
+                        else:
+                            id_int = int(val_str)
+                        hex_id = format(id_int, 'x')
+                        return f"lp{hex_id}"
+                    except:
+                        return val_str
+                return val_str
+            
+            output_df["matched_hotel_id"] = output_df["matched_hotel_id"].apply(ensure_formatted).astype(str)
         
         # Save to CSV file in GCS
         filename = f"{job_id}.csv"

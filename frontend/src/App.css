@@ -467,8 +467,14 @@ h3 {
   font-size: 0.95rem;
 }
 
-.download-button {
+.action-buttons {
   margin-top: 1rem;
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.download-button {
   padding: 0.75rem 1.5rem;
   background-color: #27ae60;
   color: white;
@@ -486,5 +492,25 @@ h3 {
 
 .download-button:active {
   background-color: #1e8449;
+}
+
+.start-over-button {
+  padding: 0.75rem 1.5rem;
+  background-color: #3498db;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 1rem;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.start-over-button:hover {
+  background-color: #2980b9;
+}
+
+.start-over-button:active {
+  background-color: #21618c;
 }
 

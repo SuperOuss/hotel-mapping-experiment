@@ -11,8 +11,8 @@ const EXPECTED_HEADERS = [
   'longitude'
 ];
 
-// API base URL from environment variable (defaults to localhost for local testing)
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
+// API base URL from environment variable (defaults to remote Cloud Run backend)
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://hotel-mapping-backend-844355989729.us-east1.run.app';
 
 function App() {
   const [file, setFile] = useState(null);
@@ -563,6 +563,10 @@ function App() {
     }
   };
 
+  const handleStartOver = () => {
+    window.location.reload();
+  };
+
   return (
     <div className="app">
       <div className="container">
@@ -823,12 +827,20 @@ function App() {
                   </div>
                 )}
                 
-                <button 
-                  onClick={handleDownload}
-                  className="download-button"
-                >
-                  📥 Download Processed CSV
-                </button>
+                <div className="action-buttons">
+                  <button 
+                    onClick={handleDownload}
+                    className="download-button"
+                  >
+                    📥 Download Processed CSV
+                  </button>
+                  <button 
+                    onClick={handleStartOver}
+                    className="start-over-button"
+                  >
+                    🔄 Start Over
+                  </button>
+                </div>
               </div>
             )}
             

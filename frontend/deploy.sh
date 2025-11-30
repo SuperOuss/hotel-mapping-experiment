@@ -8,7 +8,7 @@ cd "$SCRIPT_DIR"
 
 # Configuration
 COMMIT="$(git rev-parse HEAD 2>/dev/null || echo 'latest')"
-SERVICE_NAME="hotel-mapping-backend"
+SERVICE_NAME="hotel-mapping-frontend"
 GCP_PROJECT="nuitee-lite-api"
 REGION="us-east1"  # Will be detected if service exists
 ARTIFACT_REGISTRY_REPO="docker-repo"  # Artifact Registry repository name
@@ -19,7 +19,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}=== Starting Cloud Run Deployment ===${NC}"
+echo -e "${GREEN}=== Starting Frontend Cloud Run Deployment ===${NC}"
 echo -e "Service: ${SERVICE_NAME}"
 echo -e "Commit: ${COMMIT}"
 echo -e "Project: ${GCP_PROJECT}"
@@ -43,30 +43,32 @@ done
 IMAGE_NAME="${REGION}-docker.pkg.dev/${GCP_PROJECT}/${ARTIFACT_REGISTRY_REPO}/${SERVICE_NAME}"
 echo -e "${GREEN}Using image: ${IMAGE_NAME}${NC}"
 
-# Detect or use VPC connector for lite-api-vpc
-echo -e "${GREEN}Checking for VPC connector...${NC}"
-VPC_CONNECTOR=$(gcloud compute networks vpc-access connectors list \
-    --region="${REGION}" \
-    --format="value(name)" \
-    --filter="network:lite-api-vpc AND state:READY" \
-    --project="${GCP_PROJECT}" 2>/dev/null | head -1)
+# Get backend URL - check environment variable first, then try to detect from existing backend service
+BACKEND_SERVICE="hotel-mapping-backend"
+BACKEND_URL=""
 
-if [ -z "$VPC_CONNECTOR" ]; then
-    # Fallback to any ready connector in the region
-    VPC_CONNECTOR=$(gcloud compute networks vpc-access connectors list \
-        --region="${REGION}" \
-        --format="value(name)" \
-        --filter="state:READY" \
-        --project="${GCP_PROJECT}" 2>/dev/null | head -1)
-fi
-
-if [ -z "$VPC_CONNECTOR" ]; then
-    echo -e "${YELLOW}Warning: No ready VPC connector found. Deploying without VPC access.${NC}"
+# Check if BACKEND_URL is set as environment variable
+if [ -n "${BACKEND_URL_ENV:-}" ]; then
+    BACKEND_URL="${BACKEND_URL_ENV}"
+    echo -e "${GREEN}Using backend URL from BACKEND_URL_ENV: ${BACKEND_URL}${NC}"
 else
-    # Use full path format for Cloud Run: projects/PROJECT_ID/locations/REGION/connectors/CONNECTOR_NAME
-    VPC_CONNECTOR_FULL="projects/${GCP_PROJECT}/locations/${REGION}/connectors/${VPC_CONNECTOR}"
-    echo -e "${GREEN}Found VPC connector: ${VPC_CONNECTOR}${NC}"
-    echo -e "${GREEN}Using VPC connector path: ${VPC_CONNECTOR_FULL}${NC}"
+    # Try to detect from existing backend service
+    echo -e "${GREEN}Detecting backend URL...${NC}"
+    for r in us-east1 us-central1 us-west1 europe-west1 asia-northeast1; do
+        BACKEND_URL=$(gcloud run services describe "${BACKEND_SERVICE}" --region="${r}" --format='value(status.url)' 2>/dev/null || echo "")
+        if [ -n "$BACKEND_URL" ]; then
+            echo -e "${GREEN}Found backend URL: ${BACKEND_URL}${NC}"
+            break
+        fi
+    done
+    
+    # If backend URL not found, use default
+    if [ -z "$BACKEND_URL" ]; then
+        echo -e "${YELLOW}Backend service not found. Using default URL.${NC}"
+        BACKEND_URL="https://hotel-mapping-backend-844355989729.us-east1.run.app"
+        echo -e "${YELLOW}Using backend URL: ${BACKEND_URL}${NC}"
+        echo -e "${YELLOW}You can override this by setting BACKEND_URL_ENV environment variable${NC}"
+    fi
 fi
 
 echo ""
@@ -101,55 +103,39 @@ fi
 # Build and push Docker image using Cloud Build (unless skipped)
 if [ "$SKIP_BUILD" = false ]; then
     echo -e "${GREEN}Building and pushing Docker image to Artifact Registry...${NC}"
-    gcloud builds submit --tag "${IMAGE_NAME}:${COMMIT}" --tag "${IMAGE_NAME}:latest" .
+    echo -e "${GREEN}Using backend URL: ${BACKEND_URL}${NC}"
+    
+    # Use cloudbuild.yaml with substitutions
+    gcloud builds submit \
+        --config=cloudbuild.yaml \
+        --substitutions=_VITE_API_BASE_URL="${BACKEND_URL}",_IMAGE_NAME="${IMAGE_NAME}",COMMIT_SHA="${COMMIT}" \
+        .
 else
     echo -e "${YELLOW}Skipping build, using existing image: ${IMAGE_NAME}:latest${NC}"
 fi
 
-# Set environment variables
-# Read from production_envs.txt file
-ENV_FILE="production_envs.txt"
-if [ -f "$ENV_FILE" ]; then
-    echo -e "${GREEN}Reading environment variables from ${ENV_FILE}...${NC}"
-    ENV_VARS=$(cat "$ENV_FILE" | grep -v '^#' | grep -v '^$' | tr '\n' ',' | sed 's/,$//')
-    if [ -z "$ENV_VARS" ]; then
-        echo -e "${RED}Error: No valid env vars found in ${ENV_FILE}${NC}"
-        exit 1
-    else
-        echo -e "${GREEN}Using env vars from ${ENV_FILE}: ${ENV_VARS}${NC}"
-    fi
-else
-    echo -e "${RED}Error: ${ENV_FILE} not found${NC}"
-    exit 1
-fi
-
 # Deploy to Cloud Run
 echo -e "${GREEN}Deploying to Cloud Run...${NC}"
-echo -e "${YELLOW}Setting environment variables...${NC}"
 
 # Build deploy command
 DEPLOY_CMD="gcloud run deploy ${SERVICE_NAME} \
     --image ${IMAGE_NAME}:latest \
     --platform managed \
     --region ${REGION} \
-    --set-env-vars \"${ENV_VARS}\" \
     --allow-unauthenticated \
-    --port 8080 \
-    --memory 2Gi \
-    --cpu 2 \
-    --timeout 3600 \
+    --port 80 \
+    --memory 512Mi \
+    --cpu 1 \
+    --timeout 300 \
     --max-instances 10 \
     --min-instances 0"
-
-# Add VPC connector if available
-if [ -n "$VPC_CONNECTOR" ]; then
-    DEPLOY_CMD="${DEPLOY_CMD} --vpc-connector ${VPC_CONNECTOR_FULL} --vpc-egress private-ranges-only"
-    echo -e "${GREEN}Using VPC connector: ${VPC_CONNECTOR_FULL} (private traffic routed through VPC)${NC}"
-fi
 
 # Execute deploy command
 eval $DEPLOY_CMD
 
 echo ""
 echo -e "${GREEN}=== Deployment Complete ===${NC}"
-echo -e "Service URL: $(gcloud run services describe ${SERVICE_NAME} --region ${REGION} --format 'value(status.url)')"
+FRONTEND_URL=$(gcloud run services describe ${SERVICE_NAME} --region ${REGION} --format 'value(status.url)')
+echo -e "Frontend URL: ${FRONTEND_URL}"
+echo -e "Backend URL: ${BACKEND_URL}"
+

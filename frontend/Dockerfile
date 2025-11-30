@@ -11,6 +11,10 @@ RUN npm ci
 # Copy source code
 COPY . .
 
+# Set API base URL for production build
+ARG VITE_API_BASE_URL=https://hotel-mapping-backend-844355989729.us-east1.run.app
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
+
 # Build the application
 RUN npm run build
 
